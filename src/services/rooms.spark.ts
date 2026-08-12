@@ -2,7 +2,6 @@ import { FirebaseError } from "firebase/app";
 import { signInAnonymously, type User } from "firebase/auth";
 import {
   get,
-  limitToLast,
   off,
   onDisconnect,
   onValue,
@@ -22,6 +21,7 @@ import type { Difficulty, RoomData, RoomPlayer, RoomSummary } from "../types";
 
 const DISCONNECT_GRACE_MS = 30_000;
 const FINISHED_ROOM_TTL_MS = 5 * 60_000;
+const ACTIVE_ROOM_TTL_MS = 2 * 60 * 60_000;
 
 type StoredPlayer = Omit<RoomPlayer, "id"> & { joinHash: string };
 type StoredRoom = Omit<RoomData, "players"> & { players: Record<string, StoredPlayer> };
@@ -75,6 +75,8 @@ function directoryValue(room: StoredRoom): DirectoryValue {
     status: room.meta.status,
     createdAt: room.meta.createdAt,
   };
+  const currentRound = room.meta.currentRoundId ? room.rounds?.[room.meta.currentRoundId] : undefined;
+  if (currentRound?.createdAt !== undefined) value.startedAt = currentRound.createdAt;
   if (room.meta.finishedAt !== undefined) value.finishedAt = room.meta.finishedAt;
   return value;
 }
@@ -84,11 +86,31 @@ async function syncDirectory(roomId: string): Promise<void> {
   if (!snapshot.exists()) return;
   await set(ref(database, `roomDirectory/${roomId}`), directoryValue(snapshot.val() as StoredRoom));
 }
-async function cleanupExpiredRoom(room: Pick<RoomSummary, "id" | "status" | "finishedAt">): Promise<void> {
-  if (room.status !== "finished" || !room.finishedAt || Date.now() - room.finishedAt < FINISHED_ROOM_TTL_MS) return;
-  await remove(ref(database, `roomSecrets/${room.id}`));
-  await remove(ref(database, `rooms/${room.id}`));
-  await remove(ref(database, `roomDirectory/${room.id}`));
+function roomExpiryAt(room: Pick<RoomSummary, "status" | "startedAt" | "finishedAt">): number | null {
+  if (room.status === "finished" && room.finishedAt) return room.finishedAt + FINISHED_ROOM_TTL_MS;
+  if ((room.status === "playing" || room.status === "results") && room.startedAt) return room.startedAt + ACTIVE_ROOM_TTL_MS;
+  return null;
+}
+
+async function removeRoomData(roomId: string): Promise<void> {
+  await remove(ref(database, `roomSecrets/${roomId}`));
+  await remove(ref(database, `rooms/${roomId}`));
+  await remove(ref(database, `roomDirectory/${roomId}`));
+}
+
+async function cleanupExpiredRoom(room: Pick<RoomSummary, "id" | "status" | "startedAt" | "finishedAt">): Promise<void> {
+  const expiresAt = roomExpiryAt(room);
+  if (!expiresAt || Date.now() < expiresAt) return;
+  await removeRoomData(room.id);
+}
+
+export async function deleteFinishedRoom(roomId: string): Promise<void> {
+  await ensureAnonymousUser();
+  const snapshot = await get(ref(database, `roomDirectory/${roomId}`));
+  if (!snapshot.exists()) return;
+  const room = snapshot.val() as Omit<RoomSummary, "id">;
+  if (room.status !== "finished") throw new Error("終了したルームだけ削除できます。");
+  await removeRoomData(roomId);
 }
 
 function normalizedStatus(room: StoredRoom): "playing" | "results" | "finished" {
@@ -122,7 +144,7 @@ export function subscribeRoomDirectory(
   onRooms: (rooms: RoomSummary[]) => void,
   onError: (error: Error) => void,
 ): Unsubscribe {
-  const directoryQuery = query(ref(database, "roomDirectory"), orderByChild("createdAt"), limitToLast(50));
+  const directoryQuery = query(ref(database, "roomDirectory"), orderByChild("createdAt"));
   let expiryTimer: ReturnType<typeof setTimeout> | undefined;
   const unsubscribe = onValue(
     directoryQuery,
@@ -133,17 +155,21 @@ export function subscribeRoomDirectory(
         .map(([id, room]) => ({ id, ...room }))
         .sort((a, b) => b.createdAt - a.createdAt);
       const now = Date.now();
-      const expired = rooms.filter((room) => room.status === "finished" && room.finishedAt && now - room.finishedAt >= FINISHED_ROOM_TTL_MS);
+      const expired = rooms.filter((room) => {
+        const expiresAt = roomExpiryAt(room);
+        return expiresAt !== null && now >= expiresAt;
+      });
       expired.forEach((room) => { void cleanupExpiredRoom(room).catch(() => undefined); });
       onRooms(rooms.filter((room) => !expired.includes(room)));
 
       const nextExpiry = rooms
-        .filter((room) => room.status === "finished" && room.finishedAt && now - room.finishedAt < FINISHED_ROOM_TTL_MS)
-        .sort((a, b) => (a.finishedAt ?? Infinity) - (b.finishedAt ?? Infinity))[0];
-      if (nextExpiry?.finishedAt) {
+        .map((room) => ({ room, expiresAt: roomExpiryAt(room) }))
+        .filter((item): item is { room: RoomSummary; expiresAt: number } => item.expiresAt !== null && item.expiresAt > now)
+        .sort((a, b) => a.expiresAt - b.expiresAt)[0];
+      if (nextExpiry) {
         expiryTimer = setTimeout(() => {
-          void cleanupExpiredRoom(nextExpiry).catch(() => undefined);
-        }, Math.max(100, nextExpiry.finishedAt + FINISHED_ROOM_TTL_MS - now + 100));
+          void cleanupExpiredRoom(nextExpiry.room).catch(() => undefined);
+        }, Math.max(100, nextExpiry.expiresAt - now + 100));
       }
     },
     onError,
@@ -165,10 +191,14 @@ export function subscribeRoom(
     if (expiryTimer) clearTimeout(expiryTimer);
     const room = snapshot.val() as RoomData | null;
     onRoom(room);
-    if (room?.meta.status === "finished" && room.meta.finishedAt) {
+    if (!room) return;
+    const startedAt = room.meta.currentRoundId ? room.rounds?.[room.meta.currentRoundId]?.createdAt : undefined;
+    const summary = { id: roomId, status: room.meta.status, startedAt, finishedAt: room.meta.finishedAt };
+    const expiresAt = roomExpiryAt(summary);
+    if (expiresAt) {
       expiryTimer = setTimeout(() => {
-        void cleanupExpiredRoom({ id: roomId, status: "finished", finishedAt: room.meta.finishedAt }).catch(() => undefined);
-      }, Math.max(100, room.meta.finishedAt + FINISHED_ROOM_TTL_MS - Date.now() + 100));
+        void cleanupExpiredRoom(summary).catch(() => undefined);
+      }, Math.max(100, expiresAt - Date.now() + 100));
     }
   }, onError);
   return () => {

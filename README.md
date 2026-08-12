@@ -15,7 +15,8 @@ This repository does not contain the live deployment URL, Firebase project ID, F
 - Countdown, correct-answer, wrong-answer, and finish sound effects
 - Mobile-focused active-cell centering with pinned row and column guides
 - In-race exit support, recorded as DNF while racing
-- Finished rooms are removed after about five minutes; on the Spark edition, a connected client or the next room-browser visit performs cleanup
+- Anyone can delete a finished room immediately; otherwise it is removed after about five minutes
+- Active or results-pending rooms are removed two hours after the race starts; on Spark, a connected client or the next room-browser visit performs cleanup
 - Physical keyboard and on-screen keypad input, including Clear, Backspace, and PASS
 - Dot-based race progress driven only by completed-problem count; numeric scores and provisional rankings stay hidden
 - 3–2–1–GO countdown, mobile board zoom, final-stretch display, and live results
