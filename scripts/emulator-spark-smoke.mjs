@@ -13,13 +13,15 @@ import {
 
 const projectId = "demo-hundred-rally";
 const roomId = `spark-smoke-${Date.now()}`;
+const activeRoomId = `${roomId}-active`;
+const staleRoomId = `${roomId}-stale`;
 const authPort = Number(process.env.SPARK_AUTH_PORT || 9099);
 const databasePort = Number(process.env.SPARK_DATABASE_PORT || 9000);
 let stage = "startup";
 const watchdog = setTimeout(() => {
   console.error(`Spark smoke timed out at: ${stage}`);
   process.exit(2);
-}, 20_000);
+}, 30_000);
 
 function client(name) {
   const app = initializeApp({
@@ -61,6 +63,8 @@ function summary(room, hostId) {
     status: room.meta.status,
     createdAt: room.meta.createdAt,
   };
+  const currentRound = room.meta.currentRoundId ? room.rounds?.[room.meta.currentRoundId] : undefined;
+  if (currentRound?.createdAt !== undefined) value.startedAt = currentRound.createdAt;
   if (room.meta.finishedAt !== undefined) value.finishedAt = room.meta.finishedAt;
   return value;
 }
@@ -68,10 +72,13 @@ function summary(room, hostId) {
 stage = "create clients";
 const host = client("spark-host");
 const guest = client("spark-guest");
+const outsider = client("spark-outsider");
 stage = "authenticate host";
 const hostUser = (await signInAnonymously(host.auth)).user;
 stage = "authenticate guest";
 const guestUser = (await signInAnonymously(guest.auth)).user;
+stage = "authenticate outsider";
+await signInAnonymously(outsider.auth);
 const now = Date.now();
 
 const hostPlayer = player("HOST", now, "OPEN", true);
@@ -161,8 +168,7 @@ await update(ref(host.database, `rooms/${roomId}/players/${hostUser.uid}`), {
   disconnectedAt: Date.now(),
   status: "dnf",
 });
-const expiredAt = Date.now() - 300_100;
-await update(ref(guest.database, `rooms/${roomId}/meta`), { status: "finished", finishedAt: expiredAt });
+await update(ref(guest.database, `rooms/${roomId}/meta`), { status: "finished", finishedAt: Date.now() });
 
 const finished = (await get(ref(host.database, `rooms/${roomId}`))).val();
 await set(ref(guest.database, `roomDirectory/${roomId}`), summary(finished, hostUser.uid));
@@ -170,12 +176,69 @@ if (finished.players[guestUser.uid].completedCount !== 100 || finished.players[h
   throw new Error("Progress or finish state did not synchronize.");
 }
 
-stage = "cleanup";
-await remove(ref(guest.database, `roomSecrets/${roomId}`));
-await remove(ref(guest.database, `rooms/${roomId}`));
-await remove(ref(guest.database, `roomDirectory/${roomId}`));
+stage = "finished room cleanup by outsider";
+await remove(ref(outsider.database, `roomSecrets/${roomId}`));
+await remove(ref(outsider.database, `rooms/${roomId}`));
+await remove(ref(outsider.database, `roomDirectory/${roomId}`));
 
-await Promise.all([deleteApp(host.auth.app), deleteApp(guest.auth.app)]);
+function racingRoom(startedAt) {
+  return {
+    meta: {
+      roomName: "ACTIVE RACE",
+      hostId: hostUser.uid,
+      maxPlayers: 8,
+      gameMode: "multiplication",
+      difficulty: "normal",
+      status: "playing",
+      isLocked: false,
+      createdAt: startedAt,
+      currentRoundId: "round-active",
+    },
+    players: {
+      [hostUser.uid]: { ...player("HOST", startedAt, "OPEN", false), status: "racing" },
+    },
+    rounds: {
+      "round-active": {
+        seed: "active-seed",
+        rowValues: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        columnValues: [10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
+        difficulty: "normal",
+        gameMode: "multiplication",
+        createdAt: startedAt,
+        participantIds: [hostUser.uid],
+      },
+    },
+  };
+}
+
+stage = "reject early active cleanup";
+const activeStartedAt = Date.now();
+const activeRoom = racingRoom(activeStartedAt);
+await set(ref(host.database, `roomSecrets/${activeRoomId}`), { ownerId: hostUser.uid, joinHash: "OPEN", createdAt: activeStartedAt });
+await set(ref(host.database, `rooms/${activeRoomId}`), activeRoom);
+await set(ref(host.database, `roomDirectory/${activeRoomId}`), summary(activeRoom, hostUser.uid));
+let activeCleanupRejected = false;
+try {
+  await remove(ref(outsider.database, `roomDirectory/${activeRoomId}`));
+} catch {
+  activeCleanupRejected = true;
+}
+if (!activeCleanupRejected) throw new Error("A non-expired active room was deleted by an outsider.");
+await remove(ref(host.database, `roomSecrets/${activeRoomId}`));
+await remove(ref(host.database, `rooms/${activeRoomId}`));
+await remove(ref(host.database, `roomDirectory/${activeRoomId}`));
+
+stage = "two-hour active room cleanup by outsider";
+const staleStartedAt = Date.now() - 7_200_100;
+const staleRoom = racingRoom(staleStartedAt);
+await set(ref(host.database, `roomSecrets/${staleRoomId}`), { ownerId: hostUser.uid, joinHash: "OPEN", createdAt: staleStartedAt });
+await set(ref(host.database, `rooms/${staleRoomId}`), staleRoom);
+await set(ref(host.database, `roomDirectory/${staleRoomId}`), summary(staleRoom, hostUser.uid));
+await remove(ref(outsider.database, `roomSecrets/${staleRoomId}`));
+await remove(ref(outsider.database, `rooms/${staleRoomId}`));
+await remove(ref(outsider.database, `roomDirectory/${staleRoomId}`));
+
+await Promise.all([deleteApp(host.auth.app), deleteApp(guest.auth.app), deleteApp(outsider.auth.app)]);
 clearTimeout(watchdog);
-console.log("Spark smoke passed: create, protected join, ready, start, progress, match exit, finish, TTL cleanup.");
+console.log("Spark smoke passed: finished deletion by outsider, early-delete rejection, and two-hour active cleanup.");
 process.exit(0);

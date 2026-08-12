@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type CSSProperties, type FormEvent } from "react";
 import { Brand, difficultyLabels, ErrorBanner, Modal, PixelButton, PLAYER_COLORS, statusLabels } from "../components/ui";
-import { createRoom, friendlyError, joinRoom, subscribeRoomDirectory } from "../services/rooms.spark";
+import { createRoom, deleteFinishedRoom, friendlyError, joinRoom, subscribeRoomDirectory } from "../services/rooms.spark";
 import type { Difficulty, RoomSummary } from "../types";
 
 export function RoomBrowser({
@@ -18,6 +18,7 @@ export function RoomBrowser({
   const [creating, setCreating] = useState(false);
   const [joinTarget, setJoinTarget] = useState<RoomSummary | null>(null);
   const [joiningRoomId, setJoiningRoomId] = useState<string | null>(null);
+  const [deletingRoomId, setDeletingRoomId] = useState<string | null>(null);
 
   useEffect(() => subscribeRoomDirectory(
     (nextRooms) => {
@@ -44,6 +45,19 @@ export function RoomBrowser({
       setJoiningRoomId(null);
     }
   }, [onJoin, playerName]);
+
+  const deleteRoom = useCallback(async (room: RoomSummary) => {
+    if (room.status !== "finished" || !window.confirm(`終了した「${room.roomName}」を削除しますか？`)) return;
+    setDeletingRoomId(room.id);
+    setError("");
+    try {
+      await deleteFinishedRoom(room.id);
+    } catch (cause) {
+      setError(friendlyError(cause));
+    } finally {
+      setDeletingRoomId(null);
+    }
+  }, []);
 
   return (
     <main className="screen-shell browser-screen">
@@ -79,26 +93,37 @@ export function RoomBrowser({
         {rooms.map((room, index) => {
           const joinable = room.status === "waiting" && room.playerCount < room.maxPlayers;
           return (
-            <button
-              type="button"
-              className={`room-card ${joinable ? "room-card--joinable" : "room-card--closed"}`}
-              key={room.id}
-              onClick={() => room.isLocked ? setJoinTarget(room) : void joinSelected(room)}
-              disabled={!joinable || joiningRoomId === room.id}
-            >
-              <span className="room-card__stripe" style={{ "--room-color": PLAYER_COLORS[index % PLAYER_COLORS.length] } as CSSProperties} />
-              <span className="room-card__topline">
-                <span className={`status status--${room.status}`}>{statusLabels[room.status]}</span>
-                {room.isLocked && <span className="lock" aria-label="合言葉あり">◆</span>}
-              </span>
-              <strong className="room-card__name">{room.roomName}</strong>
-              <span className="room-card__host">HOST / {room.hostName}</span>
-              <span className="room-card__details">
-                <span>{difficultyLabels[room.difficulty]}</span>
-                <b>{room.playerCount}<i>/</i>{room.maxPlayers}</b>
-              </span>
-              <span className="room-card__cta">{joiningRoomId === room.id ? "JOINING..." : joinable ? "JOIN RACE ›" : statusLabels[room.status]}</span>
-            </button>
+            <div className="room-card-shell" key={room.id}>
+              <button
+                type="button"
+                className={`room-card ${joinable ? "room-card--joinable" : "room-card--closed"}`}
+                onClick={() => room.isLocked ? setJoinTarget(room) : void joinSelected(room)}
+                disabled={!joinable || joiningRoomId === room.id}
+              >
+                <span className="room-card__stripe" style={{ "--room-color": PLAYER_COLORS[index % PLAYER_COLORS.length] } as CSSProperties} />
+                <span className="room-card__topline">
+                  <span className={`status status--${room.status}`}>{statusLabels[room.status]}</span>
+                  {room.isLocked && <span className="lock" aria-label="合言葉あり">◆</span>}
+                </span>
+                <strong className="room-card__name">{room.roomName}</strong>
+                <span className="room-card__host">HOST / {room.hostName}</span>
+                <span className="room-card__details">
+                  <span>{difficultyLabels[room.difficulty]}</span>
+                  <b>{room.playerCount}<i>/</i>{room.maxPlayers}</b>
+                </span>
+                <span className="room-card__cta">{joiningRoomId === room.id ? "JOINING..." : joinable ? "JOIN RACE ›" : statusLabels[room.status]}</span>
+              </button>
+              {room.status === "finished" && (
+                <button
+                  type="button"
+                  className="room-card-delete"
+                  onClick={() => void deleteRoom(room)}
+                  disabled={deletingRoomId === room.id}
+                >
+                  {deletingRoomId === room.id ? "削除中..." : "削除"}
+                </button>
+              )}
+            </div>
           );
         })}
       </section>

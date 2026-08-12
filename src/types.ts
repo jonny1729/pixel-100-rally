@@ -14,6 +14,7 @@ export interface RoomSummary {
   isLocked: boolean;
   status: RoomStatus;
   createdAt: number;
+  startedAt?: number;
   finishedAt?: number;
 }
 
