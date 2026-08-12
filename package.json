@@ -1,0 +1,36 @@
+{
+    "name": "pixel-100-rally",
+    "private": true,
+    "version": "0.1.0",
+    "description": "Open-source real-time multiplayer 100-square arithmetic race",
+    "license": "MIT",
+    "engines": {
+        "node": ">=22"
+    },
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "tsc --noEmit -p tsconfig.app.json && vite build",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "emulators": "node scripts/start-emulators.mjs --project demo-hundred-rally --only auth,database,hosting",
+        "deploy:spark": "npm run build && firebase deploy --only database,hosting --config firebase.spark.json"
+    },
+    "dependencies": {
+        "firebase": "^12.0.0",
+        "react": "^19.1.0",
+        "react-dom": "^19.1.0"
+    },
+    "devDependencies": {
+        "@testing-library/jest-dom": "^6.6.3",
+        "@testing-library/react": "^16.3.0",
+        "@types/react": "^19.1.0",
+        "@types/react-dom": "^19.1.0",
+        "@vitejs/plugin-react": "^4.6.0",
+        "firebase-tools": "15.19.1",
+        "jsdom": "^26.1.0",
+        "typescript": "~5.8.3",
+        "vite": "^7.0.0",
+        "vitest": "^3.2.0"
+    }
+}

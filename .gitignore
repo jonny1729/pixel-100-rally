@@ -1,0 +1,20 @@
+node_modules/
+dist/
+functions/lib/
+functions/node_modules/
+# Legacy Cloud Functions implementation retained only for local reference.
+functions/
+src/services/rooms.ts
+scripts/emulator-smoke.mjs
+scripts/emulator-multiplayer-smoke.mjs
+scripts/emulator-all-smoke.mjs
+database.rules.json
+.env
+.env.local
+.firebaserc
+.firebase/
+firebase-debug.log
+ui-debug.log
+*.local
+*.tsbuildinfo
+*-debug.log

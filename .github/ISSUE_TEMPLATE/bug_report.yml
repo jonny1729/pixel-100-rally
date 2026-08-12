@@ -1,0 +1,39 @@
+name: Bug report
+description: 不具合を報告する
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: 不具合の内容
+      description: 何が起きたかを説明してください。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現手順
+      placeholder: |
+        1. ルームを作成する
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待する動作
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 環境
+      placeholder: iPhone / Safari、Windows / Chrome など
+  - type: checkboxes
+    id: security
+    attributes:
+      label: セキュリティ確認
+      options:
+        - label: 秘密情報や攻撃手順を含む報告ではありません（該当する場合はSECURITY.mdを確認します）
+          required: true
