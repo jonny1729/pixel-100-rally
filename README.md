@@ -1,25 +1,27 @@
 # PIXEL 100 RALLY
 
-1〜8人で遊べる、Firebaseベースのオープンソース・リアルタイム100マス計算レースです。入力・正解判定・マス移動・タイマーは各ブラウザで処理し、Firebaseには参加状態、正解済み問題数、ゴール状態、最終タイムだけを同期します。
+**English** | [日本語](README.ja.md)
 
-このリポジトリには運営中サイトのURL、FirebaseプロジェクトID、Firebaseアプリ設定、デプロイ資格情報は含まれません。自分のFirebaseプロジェクトまたはローカルEmulator Suiteで動かしてください。
+An open-source, Firebase-powered real-time 100-square arithmetic race for 1–8 players. Answer input, validation, cell movement, and timing all run locally in each browser. Firebase synchronizes only the state needed for multiplayer: participation, completed-problem count, finish state, and final time.
 
-## MVPの内容
+This repository does not contain the live deployment URL, Firebase project ID, Firebase app configuration, or deployment credentials. Run it with your own Firebase project or the local Emulator Suite.
 
-- 匿名認証とプレイヤー名
-- 公開ルーム一覧、任意の合言葉、1〜8人のルーム作成
-- 1人用タイムアタックと複数人READY対戦
-- 難易度別の掛け算100マス
-- カウントダウン・正解・不正解・ゴールの効果音
-- スマホ走行中の選択セル中央表示と、現在の行・列の固定ガイド
-- 試合中の退出（走行中はDNF）
-- 終了したルームは約5分後に削除（Spark版では接続中または次回アクセス時のクライアントが削除）
-- PCキーボード、画面テンキー、Clear、Backspace、PASS
-- 正解数だけで動くドットレース表示（数値スコア・暫定順位は非表示）
-- 3・2・1・GO、スマホ盤面ズーム、終盤表示、ライブリザルト
-- 30秒の再接続猶予、DNF、ホスト自動移譲
+## Features
 
-## 技術構成
+- Anonymous authentication and player names
+- Public room browser, optional passphrases, and rooms for 1–8 players
+- Solo time attack and multiplayer READY races
+- Difficulty-based 100-square multiplication boards
+- Countdown, correct-answer, wrong-answer, and finish sound effects
+- Mobile-focused active-cell centering with pinned row and column guides
+- In-race exit support, recorded as DNF while racing
+- Finished rooms are removed after about five minutes; on the Spark edition, a connected client or the next room-browser visit performs cleanup
+- Physical keyboard and on-screen keypad input, including Clear, Backspace, and PASS
+- Dot-based race progress driven only by completed-problem count; numeric scores and provisional rankings stay hidden
+- 3–2–1–GO countdown, mobile board zoom, final-stretch display, and live results
+- 30-second reconnection grace period, DNF handling, and automatic host transfer
+
+## Tech stack
 
 - React 19 / TypeScript / Vite
 - Firebase Anonymous Authentication
@@ -27,11 +29,11 @@
 - Firebase Hosting
 - Vitest / Testing Library
 
-入力、正解判定、マス移動、タイマーはクライアント内で完結します。Realtime Databaseへ同期するのは、参加状態、正解済み問題数、終了状態、最終タイムなど対戦に必要な最小限の状態です。
+Answer input, validation, cell movement, and timing are fully client-side. Realtime Database receives only the minimum multiplayer state, such as participation, completed-problem count, finish state, and final time.
 
-## ローカル起動
+## Local development
 
-Node.js 22とJava 21を用意してください。現在のFirebase Emulator SuiteではJava 8は使用しません。Firebase CLIはプロジェクト内にインストールされるため、グローバルインストールは不要です。
+Install Node.js 22 and Java 21. The current Firebase Emulator Suite does not support Java 8. Firebase CLI is installed inside the project, so no global installation is required.
 
 ```powershell
 Copy-Item .env.example .env.local
@@ -39,48 +41,48 @@ npm install
 npm run emulators
 ```
 
-`npm run emulators`はJava 21を自動検出し、Auth・Realtime Database・Hostingを起動します。
+`npm run emulators` automatically detects Java 21 and starts the Authentication, Realtime Database, and Hosting emulators.
 
-別のターミナルでフロントエンドを起動します。
+In another terminal, start the frontend:
 
 ```powershell
 npm run dev
 ```
 
-- Webアプリ: http://127.0.0.1:5173
+- Web app: http://127.0.0.1:5173
 - Emulator UI: http://127.0.0.1:4000
 
-複数人動作は、通常ウィンドウとプライベートウィンドウなど、匿名認証セッションが異なるブラウザコンテキストで確認できます。
+To test multiplayer locally, use browser contexts with separate anonymous-auth sessions, such as a regular window and a private window.
 
-## 検証
+## Verification
 
 ```powershell
 npm test
 npm run build
 ```
 
-Firebase込みのSpark版スモークテストは、`npm run emulators`を起動した状態で別のPowerShellから実行します。
+To run the Firebase-backed Spark smoke test, start `npm run emulators`, then run the following command in another PowerShell window:
 
 ```powershell
 node scripts/emulator-spark-smoke.mjs
 ```
 
-## 本番デプロイ
+## Production deployment
 
-無料Sparkプラン向けに、Cloud Functionsを使わずAnonymous Authentication、Realtime Database、Hostingで動作します。運営者固有のFirebase情報をコードに入れないため、先に自分のプロジェクト設定を`.env.local`と`.firebaserc`へ設定してください。
+The free Spark edition runs on Anonymous Authentication, Realtime Database, and Hosting without Cloud Functions. To keep operator-specific Firebase information out of the source, configure your own project in `.env.local` and `.firebaserc` first.
 
 ```powershell
 npm run deploy:spark
 ```
 
-- 詳細手順: [DEPLOY.md](DEPLOY.md)
+- See [DEPLOY.md](DEPLOY.md) for detailed instructions.
 
-合言葉はSHA-256の照合値として読み取り禁止の`roomSecrets`へ保存します。入力・判定・タイマーはブラウザ内、参加状態と正解数だけをRealtime Databaseへ同期します。
+Room passphrases are stored as SHA-256 comparison values under the unreadable `roomSecrets` path. Input, validation, and timing stay in the browser; Firebase synchronizes participation and completed-problem counts for the race.
 
-## コントリビューション
+## Contributing
 
-バグ報告、改善提案、翻訳、アクセシビリティ改善、ゲームモード追加を歓迎します。作業前に[CONTRIBUTING.md](CONTRIBUTING.md)と[SECURITY.md](SECURITY.md)を確認してください。
+Bug reports, improvements, translations, accessibility work, and new game modes are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md) before contributing.
 
-## ライセンス
+## License
 
-[MIT License](LICENSE)で公開しています。利用、改変、再配布、商用利用が可能です。著作権表示とライセンス文を残してください。
+Released under the [MIT License](LICENSE). You may use, modify, redistribute, and commercially use this software as long as you retain the copyright notice and license text.
