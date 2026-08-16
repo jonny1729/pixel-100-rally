@@ -2,7 +2,7 @@
 
 **English** | [日本語](README.ja.md)
 
-An open-source, Firebase-powered real-time 100-square arithmetic race for 1–8 players. Answer input, validation, cell movement, and timing all run locally in each browser. Firebase synchronizes only the state needed for multiplayer: participation, completed-problem count, finish state, and final time.
+An open-source, Firebase-powered real-time arithmetic race for 1–8 players. Race across a 5×5 or 10×10 board in addition, subtraction, multiplication, division, or greatest-common-divisor mode. Answer validation, movement, and timing run locally in each browser.
 
 This repository does not contain the live deployment URL, Firebase project ID, Firebase app configuration, or deployment credentials. Run it with your own Firebase project or the local Emulator Suite.
 
@@ -11,13 +11,15 @@ This repository does not contain the live deployment URL, Firebase project ID, F
 - Anonymous authentication and player names
 - Public room browser, optional passphrases, and rooms for 1–8 players
 - Solo time attack and multiplayer READY races
-- Difficulty-based 100-square multiplication boards
+- Five arithmetic modes, three difficulty levels, and 5×5 or 10×10 boards
+- Deterministic problem generation from the same seed and complete game settings
+- Top-five leaderboards for 30 mode, board-size, and difficulty categories, with the played seed shown
 - Countdown, correct-answer, wrong-answer, and finish sound effects
 - Mobile-focused active-cell centering with pinned row and column guides
 - In-race exit support, recorded as DNF while racing
 - Anyone can delete a finished room immediately; otherwise it is removed after about five minutes
 - Active or results-pending rooms are removed two hours after the race starts; on Spark, a connected client or the next room-browser visit performs cleanup
-- Physical keyboard and on-screen keypad input, including Clear, Backspace, and PASS
+- Physical keyboard and on-screen keypad input, including Clear, Backspace, PASS, and a not-divisible division answer
 - Dot-based race progress driven only by completed-problem count; numeric scores and provisional rankings stay hidden
 - 3–2–1–GO countdown, mobile board zoom, final-stretch display, and live results
 - 30-second reconnection grace period, DNF handling, and automatic host transfer
@@ -30,7 +32,7 @@ This repository does not contain the live deployment URL, Firebase project ID, F
 - Firebase Hosting
 - Vitest / Testing Library
 
-Answer input, validation, cell movement, and timing are fully client-side. Realtime Database receives only the minimum multiplayer state, such as participation, completed-problem count, finish state, and final time.
+Answer input, validation, cell movement, and timing are fully client-side. Realtime Database stores multiplayer state plus one category-best leaderboard entry per anonymous UID. Leaderboards are client-timed reference records and are not fully cheat-resistant.
 
 ## Local development
 
@@ -78,7 +80,7 @@ npm run deploy:spark
 
 - See [DEPLOY.md](DEPLOY.md) for detailed instructions.
 
-Room passphrases are stored as SHA-256 comparison values under the unreadable `roomSecrets` path. Input, validation, and timing stay in the browser; Firebase synchronizes participation and completed-problem counts for the race.
+Room passphrases are stored as SHA-256 comparison values under the unreadable `roomSecrets` path. Leaderboards persist player names, times, and public seeds; do not enter personal information as a player name or seed.
 
 ## Contributing
 

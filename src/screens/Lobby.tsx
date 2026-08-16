@@ -1,5 +1,5 @@
 import { useState, type CSSProperties } from "react";
-import { Brand, difficultyLabels, ErrorBanner, PixelButton, PLAYER_COLORS, roomPlayers } from "../components/ui";
+import { Brand, difficultyLabels, ErrorBanner, gameModeLabels, PixelButton, PLAYER_COLORS, roomPlayers } from "../components/ui";
 import { friendlyError, setReady, startRound } from "../services/rooms.spark";
 import type { RoomData } from "../types";
 
@@ -34,6 +34,14 @@ export function Lobby({ roomId, room, uid, onLeave }: { roomId: string; room: Ro
     }
   }
 
+  async function copySeed() {
+    try {
+      await navigator.clipboard.writeText(room.meta.seed);
+    } catch {
+      setError("シードをコピーできませんでした。");
+    }
+  }
+
   return (
     <main className="screen-shell lobby-screen">
       <header className="topbar"><Brand compact /><span className="connection-light"><i /> LIVE ROOM</span></header>
@@ -44,11 +52,12 @@ export function Lobby({ roomId, room, uid, onLeave }: { roomId: string; room: Ro
             <span className="room-id">ID {roomId.slice(-6).toUpperCase()}</span>
           </div>
           <div className="race-settings">
-            <span><small>MODE</small><strong>かけ算</strong></span>
+            <span><small>MODE</small><strong>{gameModeLabels[room.meta.gameMode]}</strong></span>
             <span><small>LEVEL</small><strong>{difficultyLabels[room.meta.difficulty]}</strong></span>
-            <span><small>GRID</small><strong>10 × 10</strong></span>
+            <span><small>GRID</small><strong>{room.meta.gridSize} × {room.meta.gridSize}</strong></span>
             <span><small>ENTRY</small><strong>{players.length} / {room.meta.maxPlayers}</strong></span>
           </div>
+          <button type="button" className="seed-chip" onClick={() => void copySeed()}><small>SEED</small><strong>{room.meta.seed}</strong><span>コピー</span></button>
           <div className="grid-slots">
             {Array.from({ length: room.meta.maxPlayers }, (_, index) => {
               const player = players[index];
@@ -80,9 +89,9 @@ export function Lobby({ roomId, room, uid, onLeave }: { roomId: string; room: Ro
           <h2>操作ルール</h2>
           <ol>
             <li><b>01</b><span>左上から順に回答</span></li>
-            <li><b>02</b><span>数字だけで即判定</span></li>
+            <li><b>02</b><span>入力した答えを即判定</span></li>
             <li><b>03</b><span>迷ったらPASS</span></li>
-            <li><b>04</b><span>100問正解でGOAL</span></li>
+            <li><b>04</b><span>{room.meta.gridSize ** 2}問正解でGOAL</span></li>
           </ol>
           <p>入力とタイマーはローカル処理。通信を待たずに走れます。</p>
         </aside>

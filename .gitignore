@@ -1,5 +1,6 @@
 node_modules/
 dist/
+AGENTS.md
 functions/lib/
 functions/node_modules/
 # Legacy Cloud Functions implementation retained only for local reference.

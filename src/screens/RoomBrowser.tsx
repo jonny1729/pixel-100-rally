@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState, type CSSProperties, type FormEvent } from "react";
-import { Brand, difficultyLabels, ErrorBanner, Modal, PixelButton, PLAYER_COLORS, statusLabels } from "../components/ui";
-import { createRoom, deleteFinishedRoom, friendlyError, joinRoom, subscribeRoomDirectory } from "../services/rooms.spark";
-import type { Difficulty, RoomSummary } from "../types";
+import { Brand, difficultyDetails, difficultyLabels, ErrorBanner, gameModeLabels, Modal, PixelButton, PLAYER_COLORS, statusLabels } from "../components/ui";
+import { formatTime } from "../game/engine";
+import { createRoom, deleteFinishedRoom, friendlyError, joinRoom, subscribeLeaderboard, subscribeRoomDirectory } from "../services/rooms.spark";
+import type { Difficulty, GameMode, GridSize, LeaderboardEntry, RoomSummary } from "../types";
 
 export function RoomBrowser({
   playerName,
@@ -16,6 +17,7 @@ export function RoomBrowser({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [joinTarget, setJoinTarget] = useState<RoomSummary | null>(null);
   const [joiningRoomId, setJoiningRoomId] = useState<string | null>(null);
   const [deletingRoomId, setDeletingRoomId] = useState<string | null>(null);
@@ -76,7 +78,10 @@ export function RoomBrowser({
           <h1>レースを選ぶ</h1>
           <p>1人練習から8人対戦まで。募集中のルームへ参加できます。</p>
         </div>
-        <PixelButton onClick={() => setCreating(true)}>＋ ルームを作る</PixelButton>
+        <div className="browser-actions">
+          <PixelButton tone="secondary" onClick={() => setShowLeaderboard(true)}>TOP 5</PixelButton>
+          <PixelButton onClick={() => setCreating(true)}>＋ ルームを作る</PixelButton>
+        </div>
       </section>
 
       {error && !joinTarget && <ErrorBanner message={error} onClose={() => setError("")} />}
@@ -108,9 +113,10 @@ export function RoomBrowser({
                 <strong className="room-card__name">{room.roomName}</strong>
                 <span className="room-card__host">HOST / {room.hostName}</span>
                 <span className="room-card__details">
-                  <span>{difficultyLabels[room.difficulty]}</span>
+                  <span>{gameModeLabels[room.gameMode]} · {room.gridSize}×{room.gridSize} · {difficultyLabels[room.difficulty]}</span>
                   <b>{room.playerCount}<i>/</i>{room.maxPlayers}</b>
                 </span>
+                <span className="room-card__seed">SEED {room.seed}</span>
                 <span className="room-card__cta">{joiningRoomId === room.id ? "JOINING..." : joinable ? "JOIN RACE ›" : statusLabels[room.status]}</span>
               </button>
               {room.status === "finished" && (
@@ -138,6 +144,7 @@ export function RoomBrowser({
           }}
         />
       )}
+      {showLeaderboard && <LeaderboardModal onClose={() => setShowLeaderboard(false)} />}
       {joinTarget && (
         <JoinRoomModal
           room={joinTarget}
@@ -163,10 +170,13 @@ function CreateRoomModal({
   onClose: () => void;
   onCreated: (roomId: string) => void;
 }) {
-  const [roomName, setRoomName] = useState(`${playerName}の100マス杯`);
+  const [roomName, setRoomName] = useState(`${playerName}の計算杯`);
   const [password, setPassword] = useState("");
   const [maxPlayers, setMaxPlayers] = useState(4);
+  const [gameMode, setGameMode] = useState<GameMode>("multiplication");
+  const [gridSize, setGridSize] = useState<GridSize>(10);
   const [difficulty, setDifficulty] = useState<Difficulty>("normal");
+  const [seed, setSeed] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -175,7 +185,7 @@ function CreateRoomModal({
     setBusy(true);
     setError("");
     try {
-      const roomId = await createRoom({ roomName, playerName, password, maxPlayers, difficulty });
+      const roomId = await createRoom({ roomName, playerName, password, maxPlayers, difficulty, gameMode, gridSize, seed });
       onCreated(roomId);
     } catch (cause) {
       setError(friendlyError(cause));
@@ -189,6 +199,22 @@ function CreateRoomModal({
       <form className="form-stack" onSubmit={handleSubmit}>
         <label>ルーム名<input value={roomName} onChange={(event) => setRoomName(event.target.value)} maxLength={24} required /></label>
         <label>合言葉 <em>OPTION</em><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} maxLength={64} placeholder="なしでも作れます" /></label>
+        <label>計算モード
+          <select value={gameMode} onChange={(event) => setGameMode(event.target.value as GameMode)}>
+            {(Object.keys(gameModeLabels) as GameMode[]).map((mode) => <option value={mode} key={mode}>{gameModeLabels[mode]}</option>)}
+          </select>
+        </label>
+        <fieldset>
+          <legend>マス数</legend>
+          <div className="segmented segmented--two">
+            {([5, 10] as GridSize[]).map((size) => (
+              <label key={size} className={gridSize === size ? "selected" : ""}>
+                <input type="radio" name="gridSize" value={size} checked={gridSize === size} onChange={() => setGridSize(size)} />
+                {size} × {size}<small>{size * size}問</small>
+              </label>
+            ))}
+          </div>
+        </fieldset>
         <fieldset>
           <legend>難易度</legend>
           <div className="segmented">
@@ -196,11 +222,21 @@ function CreateRoomModal({
               <label key={item} className={difficulty === item ? "selected" : ""}>
                 <input type="radio" name="difficulty" value={item} checked={difficulty === item} onChange={() => setDifficulty(item)} />
                 {item === "easy" ? "EASY" : item === "normal" ? "NORMAL" : "HARD"}
-                <small>{item === "easy" ? "1-5" : item === "normal" ? "1-10" : "1-20"}</small>
+                <small>{difficultyDetails[gameMode][item]}</small>
               </label>
             ))}
           </div>
         </fieldset>
+        <label>シード <em>OPTION</em>
+          <input
+            value={seed}
+            onChange={(event) => setSeed(event.target.value.toUpperCase())}
+            maxLength={24}
+            pattern="[A-Za-z0-9-]*"
+            placeholder="空欄なら自動生成"
+          />
+        </label>
+        <p className="form-hint">同じモード・マス数・難易度・シードなら同じ問題になります。シードは公開されます。</p>
         <label>参加人数 <strong>{maxPlayers}人</strong><input type="range" min={1} max={8} value={maxPlayers} onChange={(event) => setMaxPlayers(Number(event.target.value))} /></label>
         <p className="form-hint">1人にするとタイムアタック練習として遊べます。</p>
         {error && <ErrorBanner message={error} />}
@@ -209,6 +245,69 @@ function CreateRoomModal({
           <PixelButton type="submit" disabled={busy || !roomName.trim()}>{busy ? "CREATING..." : "CREATE"}</PixelButton>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+const LEADERBOARD_PREF_KEY = "pixel-rally:leaderboard-filter";
+
+function LeaderboardModal({ onClose }: { onClose: () => void }) {
+  const saved = (() => {
+    try {
+      return JSON.parse(localStorage.getItem(LEADERBOARD_PREF_KEY) ?? "{}") as Partial<{ gameMode: GameMode; gridSize: GridSize; difficulty: Difficulty }>;
+    } catch {
+      return {};
+    }
+  })();
+  const [gameMode, setGameMode] = useState<GameMode>(saved.gameMode && Object.hasOwn(gameModeLabels, saved.gameMode) ? saved.gameMode : "multiplication");
+  const [gridSize, setGridSize] = useState<GridSize>(saved.gridSize === 5 ? 5 : 10);
+  const [difficulty, setDifficulty] = useState<Difficulty>(saved.difficulty && Object.hasOwn(difficultyLabels, saved.difficulty) ? saved.difficulty : "normal");
+  const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    localStorage.setItem(LEADERBOARD_PREF_KEY, JSON.stringify({ gameMode, gridSize, difficulty }));
+    setLoading(true);
+    setError("");
+    return subscribeLeaderboard(gameMode, gridSize, difficulty, (nextEntries) => {
+      setEntries(nextEntries);
+      setLoading(false);
+    }, (cause) => {
+      setError(friendlyError(cause));
+      setLoading(false);
+    });
+  }, [difficulty, gameMode, gridSize]);
+
+  return (
+    <Modal title="LEADERBOARD TOP 5" onClose={onClose}>
+      <div className="leaderboard-filters">
+        <label>モード<select value={gameMode} onChange={(event) => setGameMode(event.target.value as GameMode)}>
+          {(Object.keys(gameModeLabels) as GameMode[]).map((mode) => <option value={mode} key={mode}>{gameModeLabels[mode]}</option>)}
+        </select></label>
+        <label>マス数<select value={gridSize} onChange={(event) => setGridSize(Number(event.target.value) as GridSize)}>
+          <option value={5}>5 × 5</option><option value={10}>10 × 10</option>
+        </select></label>
+        <label>難易度<select value={difficulty} onChange={(event) => setDifficulty(event.target.value as Difficulty)}>
+          {(Object.keys(difficultyLabels) as Difficulty[]).map((level) => <option value={level} key={level}>{difficultyLabels[level]}</option>)}
+        </select></label>
+      </div>
+      {error && <ErrorBanner message={error} />}
+      {loading ? <div className="leaderboard-empty"><span className="loading-dots">•••</span><p>ランキングを受信中</p></div> : entries.length === 0 ? (
+        <div className="leaderboard-empty"><p>このカテゴリーの記録はまだありません。</p></div>
+      ) : (
+        <ol className="leaderboard-list">
+          {entries.map((entry, index) => (
+            <li key={entry.id}>
+              <span className="leaderboard-rank">{String(index + 1).padStart(2, "0")}</span>
+              <strong>{entry.playerName}</strong>
+              <span className="leaderboard-time">{formatTime(entry.elapsedTime)}</span>
+              <small>SEED {entry.seed}</small>
+            </li>
+          ))}
+        </ol>
+      )}
+      <p className="leaderboard-note">異なるシードを含む、クライアント計測の参考記録です。</p>
     </Modal>
   );
 }

@@ -8,22 +8,26 @@ import {
   createRun,
   currentIndex,
   enterDigit,
+  enterNotDivisible,
   formatTime,
-  multiplicationGame,
+  gameDefinitions,
+  NOT_DIVISIBLE,
   passCurrent,
+  roundGridSize,
+  totalProblems,
 } from "../game/engine";
 import { playCorrectSound, playCountdownBeep, playGoalSound, playWrongSound } from "../game/sound";
-import { friendlyError, submitFinish, syncCompletedCount } from "../services/rooms.spark";
+import { friendlyError, recordLeaderboardBest, submitFinish, syncCompletedCount } from "../services/rooms.spark";
 import type { LocalRunState, PersistedRun, RoomData, RoomPlayer, RoundConfig } from "../types";
 
-function RaceTrack({ players, uid, ownCount }: { players: RoomPlayer[]; uid: string; ownCount: number }) {
+function RaceTrack({ players, uid, ownCount, total }: { players: RoomPlayer[]; uid: string; ownCount: number; total: number }) {
   return (
     <aside className="race-hud" aria-label="参加者のゴールまでの距離">
       <div className="race-hud__header"><span>RACE MONITOR</span><b>GOAL</b></div>
       <div className="race-lanes">
         {players.map((player, index) => {
           const count = player.id === uid ? ownCount : player.completedCount;
-          const progress = Math.max(0, Math.min(100, count));
+          const progress = Math.max(0, Math.min(100, count / total * 100));
           return (
             <div className={`race-lane ${player.id === uid ? "race-lane--me" : ""}`} key={player.id}>
               <span className="race-lane__name">{player.name}</span>
@@ -43,8 +47,10 @@ function RaceTrack({ players, uid, ownCount }: { players: RoomPlayer[]; uid: str
 }
 
 function HundredGrid({ round, state, racing }: { round: RoundConfig; state: LocalRunState; racing: boolean }) {
+  const gridSize = roundGridSize(round);
+  const game = gameDefinitions[round.gameMode];
   const active = currentIndex(state);
-  const point = active === null ? { row: 9, column: 9 } : coordinates(active);
+  const point = active === null ? { row: gridSize - 1, column: gridSize - 1 } : coordinates(active, gridSize);
   const viewportRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const [guides, setGuides] = useState({
@@ -58,8 +64,11 @@ function HundredGrid({ round, state, racing }: { round: RoundConfig; state: Loca
     cornerHeight: 0,
   });
   const style = {
-    "--board-x": `${(4 - point.column) * 9.091}%`,
-    "--board-y": `${(4 - point.row) * 9.091}%`,
+    "--grid-dimension": gridSize + 1,
+    "--grid-size": gridSize,
+    "--race-scale": gridSize === 5 ? 1.12 : 1.7,
+    "--board-x": `${((gridSize - 1) / 2 - point.column) * 100 / (gridSize + 1)}%`,
+    "--board-y": `${((gridSize - 1) / 2 - point.row) * 100 / (gridSize + 1)}%`,
     "--freeze-x": guides.showRow ? `${guides.cornerWidth / 2}px` : "0px",
     "--freeze-y": guides.showColumn ? `${guides.cornerHeight / 2}px` : "0px",
   } as CSSProperties;
@@ -158,17 +167,17 @@ function HundredGrid({ round, state, racing }: { round: RoundConfig; state: Loca
           }}
           aria-hidden="true"
         >
-          ×
+          {game.symbol}
         </div>
       )}
-      <div ref={gridRef} className="hundred-grid" style={style}>
-        <div className="grid-header grid-corner">×</div>
+      <div ref={gridRef} className={`hundred-grid hundred-grid--${gridSize}`} style={style}>
+        <div className="grid-header grid-corner">{game.symbol}</div>
         {round.columnValues.map((value, index) => <div className="grid-header" data-column-header={index} key={`column-${index}`}>{value}</div>)}
         {round.rowValues.map((rowValue, row) => (
           <div className="grid-row" key={`row-${row}`}>
             <div className="grid-header" data-row-header={row}>{rowValue}</div>
             {round.columnValues.map((_, column) => {
-              const index = row * 10 + column;
+              const index = row * gridSize + column;
               const isActive = active === index;
               const solved = state.answers[index] !== null;
               return (
@@ -177,7 +186,7 @@ function HundredGrid({ round, state, racing }: { round: RoundConfig; state: Loca
                   data-grid-cell={index}
                   key={index}
                 >
-                  {solved ? state.answers[index] : isActive ? <span>{state.input}<i /></span> : state.passed[index] ? "·" : ""}
+                  {solved ? state.answers[index] === NOT_DIVISIBLE ? "—" : state.answers[index] : isActive ? <span>{state.input}<i /></span> : state.passed[index] ? "·" : ""}
                 </div>
               );
             })}
@@ -192,12 +201,14 @@ function NumberPad({
   onDigit,
   onClear,
   onBackspace,
+  onNotDivisible,
   onPass,
 }: {
   disabled: boolean;
   onDigit: (digit: number) => void;
   onClear: () => void;
   onBackspace: () => void;
+  onNotDivisible?: () => void;
   onPass: () => void;
 }) {
   return (
@@ -208,6 +219,7 @@ function NumberPad({
       <button type="button" className="number-pad__clear" onPointerDown={(event) => { event.preventDefault(); onClear(); }} disabled={disabled}>CLR</button>
       <button type="button" onPointerDown={(event) => { event.preventDefault(); onDigit(0); }} disabled={disabled}>0</button>
       <button type="button" className="number-pad__back" onPointerDown={(event) => { event.preventDefault(); onBackspace(); }} disabled={disabled}>⌫</button>
+      {onNotDivisible && <button type="button" className="number-pad__not-divisible" onPointerDown={(event) => { event.preventDefault(); onNotDivisible(); }} disabled={disabled}>割り切れない</button>}
       <button type="button" className="number-pad__pass" onPointerDown={(event) => { event.preventDefault(); onPass(); }} disabled={disabled}>PASS ›</button>
     </div>
   );
@@ -255,16 +267,19 @@ function ResultsPanel({ room, uid, ownTime, onLeave }: { room: RoomData; uid: st
   );
 }
 
-function restoreRun(storageKey: string, roundId: string): { persisted: PersistedRun; restored: boolean } {
+function restoreRun(storageKey: string, round: RoundConfig): { persisted: PersistedRun; restored: boolean } {
+  const total = totalProblems(round);
   try {
     const raw = localStorage.getItem(storageKey);
     const parsed = raw ? JSON.parse(raw) as PersistedRun : null;
-    if (parsed?.state?.roundId === roundId) return { persisted: parsed, restored: true };
+    if (parsed?.state?.roundId === round.id && parsed.state.answers?.length === total && parsed.state.passed?.length === total) {
+      return { persisted: parsed, restored: true };
+    }
   } catch {
     // A corrupt local snapshot should never prevent a race from starting.
   }
   return {
-    persisted: { state: createRun(roundId), elapsedMs: 0, savedAt: Date.now() },
+    persisted: { state: createRun(round.id, roundGridSize(round)), elapsedMs: 0, savedAt: Date.now() },
     restored: false,
   };
 }
@@ -284,7 +299,7 @@ export function GameScreen({
 }) {
   const storageKey = `pixel-rally:run:${roomId}:${round.id}:${uid}`;
   const initialRef = useRef<ReturnType<typeof restoreRun> | null>(null);
-  if (!initialRef.current) initialRef.current = restoreRun(storageKey, round.id);
+  if (!initialRef.current) initialRef.current = restoreRun(storageKey, round);
   const initial = initialRef.current;
   const [run, setRun] = useState<LocalRunState>(initial.persisted.state);
   const runRef = useRef(run);
@@ -296,12 +311,23 @@ export function GameScreen({
   const startPerfRef = useRef(performance.now());
   const [flash, setFlash] = useState<"correct" | "wrong" | "">("");
   const serverPlayer = room.players[uid];
-  const [localFinished, setLocalFinished] = useState(serverPlayer?.status === "finished" || completedCount(run) === 100);
+  const total = totalProblems(round);
+  const [localFinished, setLocalFinished] = useState(serverPlayer?.status === "finished" || completedCount(run) === total);
   const [ownFinishTime, setOwnFinishTime] = useState<number | null>(serverPlayer?.elapsedTime ?? null);
   const [error, setError] = useState("");
   const flashTimer = useRef<number | null>(null);
+  const leaderboardRetryRef = useRef(false);
 
   useEffect(() => { runRef.current = run; }, [run]);
+
+  useEffect(() => {
+    if (serverPlayer?.status !== "finished" || leaderboardRetryRef.current) return;
+    leaderboardRetryRef.current = true;
+    void recordLeaderboardBest(roomId, round.id).catch((cause) => {
+      leaderboardRetryRef.current = false;
+      setError(friendlyError(cause));
+    });
+  }, [roomId, round.id, serverPlayer?.status]);
 
   useEffect(() => {
     if (initial.restored) return;
@@ -379,14 +405,12 @@ export function GameScreen({
     setLocalFinished(true);
     localStorage.removeItem(storageKey);
     playGoalSound();
-    void syncCompletedCount(roomId, uid, 100).catch(() => undefined);
+    void syncCompletedCount(roomId, uid, total).catch(() => undefined);
     void submitFinish(roomId, round.id, finalTime).catch((cause) => setError(friendlyError(cause)));
     runRef.current = finalState;
-  }, [roomId, round.id, storageKey, uid]);
+  }, [roomId, round.id, storageKey, total, uid]);
 
-  const handleDigit = useCallback((digit: number) => {
-    if (!raceStarted || localFinished) return;
-    const result = enterDigit(runRef.current, digit, round);
+  const applyInputResult = useCallback((result: ReturnType<typeof enterDigit>) => {
     runRef.current = result.state;
     setRun(result.state);
     if (result.event === "wrong") {
@@ -400,7 +424,17 @@ export function GameScreen({
       void syncCompletedCount(roomId, uid, count).catch(() => undefined);
       if (result.event === "finished") finish(result.state);
     }
-  }, [finish, localFinished, pulse, raceStarted, roomId, round, uid]);
+  }, [finish, pulse, roomId, uid]);
+
+  const handleDigit = useCallback((digit: number) => {
+    if (!raceStarted || localFinished) return;
+    applyInputResult(enterDigit(runRef.current, digit, round));
+  }, [applyInputResult, localFinished, raceStarted, round]);
+
+  const handleNotDivisible = useCallback(() => {
+    if (!raceStarted || localFinished) return;
+    applyInputResult(enterNotDivisible(runRef.current, round));
+  }, [applyInputResult, localFinished, raceStarted, round]);
 
   const handleClear = useCallback(() => {
     if (!raceStarted || localFinished) return;
@@ -435,20 +469,25 @@ export function GameScreen({
       } else if (event.key === "Delete" || event.key === "Escape") {
         event.preventDefault();
         handleClear();
+      } else if (round.gameMode === "division" && event.key.toLowerCase() === "n") {
+        event.preventDefault();
+        handleNotDivisible();
       }
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-  }, [handleBackspace, handleClear, handleDigit]);
+  }, [handleBackspace, handleClear, handleDigit, handleNotDivisible, round.gameMode]);
 
   const handleLeaveRace = useCallback(() => {
     if (window.confirm("このレースを退出しますか？走行中の場合はDNFになります。")) onLeave();
   }, [onLeave]);
 
   const ownCount = completedCount(run);
-  const finalSprint = 100 - ownCount <= 5 && !localFinished;
+  const finalSprint = total - ownCount <= 5 && !localFinished;
   const index = currentIndex(run);
-  const problem = index === null ? null : coordinates(index);
+  const gridSize = roundGridSize(round);
+  const problem = index === null ? null : coordinates(index, gridSize);
+  const game = gameDefinitions[round.gameMode];
   const players = roomPlayers(room);
 
   return (
@@ -461,7 +500,7 @@ export function GameScreen({
         <div className={`game-timer ${finalSprint ? "game-timer--hidden" : ""}`}>
           <small>TIME</small><strong>{finalSprint ? "??:??.???" : formatTime(elapsed)}</strong>
         </div>
-        {!finalSprint ? <RaceTrack players={players} uid={uid} ownCount={ownCount} /> : <div className="final-lap">FINAL<br />SPRINT!</div>}
+        {!finalSprint ? <RaceTrack players={players} uid={uid} ownCount={ownCount} total={total} /> : <div className="final-lap">FINAL<br />SPRINT!</div>}
       </header>
 
       {error && <div className="game-error"><ErrorBanner message={error} onClose={() => setError("")} /></div>}
@@ -469,19 +508,25 @@ export function GameScreen({
       <div className="game-layout">
         <section className="board-zone">
           <HundredGrid round={round} state={run} racing={raceStarted && countdown === null && !localFinished} />
-          <div className="board-caption"><span>START</span><i /><span>100 GRID CIRCUIT</span><i /><span>GOAL</span></div>
+          <div className="board-caption"><span>START</span><i /><span>{total} GRID CIRCUIT</span><i /><span>GOAL</span></div>
         </section>
         <aside className="control-zone">
           <div className={`current-question ${flash ? `current-question--${flash}` : ""}`}>
             <small>CURRENT CELL</small>
             {problem ? (
-              <div className="question-line">
-                <span>{round.rowValues[problem.row]}</span><b>{multiplicationGame.symbol}</b><span>{round.columnValues[problem.column]}</span><b>=</b><strong>{run.input || "_"}</strong>
-              </div>
+              game.id === "gcd" ? (
+                <div className="question-line question-line--gcd">
+                  <span>GCD({round.rowValues[problem.row]}, {round.columnValues[problem.column]})</span><b>=</b><strong>{run.input || "_"}</strong>
+                </div>
+              ) : (
+                <div className="question-line">
+                  <span>{round.rowValues[problem.row]}</span><b>{game.symbol}</b><span>{round.columnValues[problem.column]}</span><b>=</b><strong>{run.input || "_"}</strong>
+                </div>
+              )
             ) : <div className="question-line"><strong>GOAL!</strong></div>}
           </div>
-          <NumberPad disabled={!raceStarted || localFinished} onDigit={handleDigit} onClear={handleClear} onBackspace={handleBackspace} onPass={handlePass} />
-          <div className="keyboard-hint"><kbd>0-9</kbd> 数字入力 <kbd>⌫</kbd> 1文字削除 <kbd>DEL</kbd> クリア</div>
+          <NumberPad disabled={!raceStarted || localFinished} onDigit={handleDigit} onClear={handleClear} onBackspace={handleBackspace} onNotDivisible={game.id === "division" ? handleNotDivisible : undefined} onPass={handlePass} />
+          <div className="keyboard-hint"><kbd>0-9</kbd> 数字入力 {game.id === "division" && <><kbd>N</kbd> 割り切れない </>}<kbd>⌫</kbd> 1文字削除 <kbd>DEL</kbd> クリア</div>
         </aside>
       </div>
 

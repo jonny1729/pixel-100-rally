@@ -1,5 +1,7 @@
 export type Difficulty = "easy" | "normal" | "hard";
-export type GameMode = "multiplication";
+export type GameMode = "addition" | "subtraction" | "multiplication" | "division" | "gcd";
+export type GridSize = 5 | 10;
+export type Answer = number | "not-divisible";
 export type RoomStatus = "waiting" | "playing" | "results" | "finished";
 export type PlayerStatus = "lobby" | "racing" | "finished" | "dnf";
 
@@ -11,6 +13,8 @@ export interface RoomSummary {
   maxPlayers: number;
   gameMode: GameMode;
   difficulty: Difficulty;
+  gridSize: GridSize;
+  seed: string;
   isLocked: boolean;
   status: RoomStatus;
   createdAt: number;
@@ -24,6 +28,8 @@ export interface RoomMeta {
   maxPlayers: number;
   gameMode: GameMode;
   difficulty: Difficulty;
+  gridSize: GridSize;
+  seed: string;
   status: RoomStatus;
   isLocked: boolean;
   createdAt: number;
@@ -48,10 +54,12 @@ export interface RoomPlayer {
 export interface RoundConfig {
   id: string;
   seed: string;
+  generatorVersion: number;
   rowValues: number[];
   columnValues: number[];
   difficulty: Difficulty;
   gameMode: GameMode;
+  gridSize: GridSize;
   createdAt: number;
   participantIds: string[];
 }
@@ -65,7 +73,7 @@ export interface RoomData {
 export interface LocalRunState {
   roundId: string;
   remainingQueue: number[];
-  answers: Array<number | null>;
+  answers: Array<Answer | null>;
   passed: boolean[];
   input: string;
   feedback: "idle" | "correct" | "wrong";
@@ -81,5 +89,16 @@ export interface GameDefinition {
   id: GameMode;
   label: string;
   symbol: string;
-  answer(rowValue: number, columnValue: number): number;
+  answer(rowValue: number, columnValue: number): Answer;
+}
+
+export interface LeaderboardEntry {
+  id: string;
+  playerName: string;
+  elapsedTime: number;
+  seed: string;
+  achievedAt: number;
+  roomId: string;
+  roundId: string;
+  generatorVersion: number;
 }

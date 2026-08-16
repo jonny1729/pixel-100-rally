@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from "react";
-import type { Difficulty, RoomData, RoomPlayer, RoomStatus, RoundConfig } from "../types";
+import type { Difficulty, GameMode, RoomData, RoomPlayer, RoomStatus, RoundConfig } from "../types";
 
 export const PLAYER_COLORS = ["#ff4f72", "#45e7ff", "#ffd43b", "#7cff6b", "#b980ff", "#ff8c42", "#ff75df", "#71a7ff"];
 
@@ -11,9 +11,25 @@ export const statusLabels: Record<RoomStatus, string> = {
 };
 
 export const difficultyLabels: Record<Difficulty, string> = {
-  easy: "かんたん 1-5",
-  normal: "ふつう 1-10",
-  hard: "むずかしい 1-20",
+  easy: "初級",
+  normal: "中級",
+  hard: "上級",
+};
+
+export const gameModeLabels: Record<GameMode, string> = {
+  addition: "足し算",
+  subtraction: "引き算",
+  multiplication: "かけ算",
+  division: "割り算",
+  gcd: "最大公約数",
+};
+
+export const difficultyDetails: Record<GameMode, Record<Difficulty, string>> = {
+  addition: { easy: "1〜20", normal: "10〜100・繰上あり", hard: "3桁・繰上あり" },
+  subtraction: { easy: "1〜20", normal: "10〜100・繰下あり", hard: "3桁・繰下あり" },
+  multiplication: { easy: "1〜5", normal: "1〜10", hard: "1〜20" },
+  division: { easy: "2〜20 ÷ 1〜5", normal: "10〜100 ÷ 2〜10", hard: "3桁 ÷ 2〜20" },
+  gcd: { easy: "2桁・素因数2/3/5", normal: "1〜200・素因数〜11", hard: "3桁・制限なし" },
 };
 
 export function roomPlayers(room: RoomData): RoomPlayer[] {
