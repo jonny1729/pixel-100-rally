@@ -2,6 +2,7 @@ import { FirebaseError } from "firebase/app";
 import { signInAnonymously, type User } from "firebase/auth";
 import {
   get,
+  limitToFirst,
   off,
   onDisconnect,
   onValue,
@@ -17,7 +18,8 @@ import {
   type Unsubscribe,
 } from "firebase/database";
 import { auth, database } from "../firebase";
-import type { Difficulty, RoomData, RoomPlayer, RoomSummary } from "../types";
+import { createRandomSeed, generateOperands, GENERATOR_VERSION, normalizeSeed } from "../game/problems";
+import type { Difficulty, GameMode, GridSize, LeaderboardEntry, RoomData, RoomPlayer, RoomSummary, RoundConfig } from "../types";
 
 const DISCONNECT_GRACE_MS = 30_000;
 const FINISHED_ROOM_TTL_MS = 5 * 60_000;
@@ -42,35 +44,63 @@ async function passwordProof(password: string): Promise<string> {
   return `sha256:${hash}`;
 }
 
-function shuffled(values: number[]): number[] {
-  const result = [...values];
-  for (let index = result.length - 1; index > 0; index -= 1) {
-    const random = crypto.getRandomValues(new Uint32Array(1))[0];
-    const target = random % (index + 1);
-    [result[index], result[target]] = [result[target], result[index]];
-  }
-  return result;
+const GAME_MODES: GameMode[] = ["addition", "subtraction", "multiplication", "division", "gcd"];
+
+function gameModeOf(value: unknown): GameMode {
+  return typeof value === "string" && GAME_MODES.includes(value as GameMode) ? value as GameMode : "multiplication";
 }
 
-function operands(difficulty: Difficulty): number[] {
-  if (difficulty === "easy") {
-    return Array.from({ length: 10 }, () => (crypto.getRandomValues(new Uint32Array(1))[0] % 5) + 1);
-  }
-  if (difficulty === "normal") return shuffled(Array.from({ length: 10 }, (_, index) => index + 1));
-  return shuffled(Array.from({ length: 20 }, (_, index) => index + 1)).slice(0, 10);
+function gridSizeOf(value: unknown, rowValues?: number[]): GridSize {
+  return value === 5 || rowValues?.length === 5 ? 5 : 10;
+}
+
+function roomSeed(room: Pick<StoredRoom, "meta" | "rounds">): string {
+  const currentRound = room.meta.currentRoundId ? room.rounds?.[room.meta.currentRoundId] : undefined;
+  return typeof room.meta.seed === "string" && room.meta.seed ? room.meta.seed : currentRound?.seed ?? "LEGACY";
+}
+
+function normalizedRound(id: string, round: Omit<RoundConfig, "id">): RoundConfig {
+  return {
+    ...round,
+    id,
+    gameMode: gameModeOf(round.gameMode),
+    gridSize: gridSizeOf(round.gridSize, round.rowValues),
+    generatorVersion: Number.isInteger(round.generatorVersion) ? round.generatorVersion : 0,
+  };
+}
+
+function normalizedRoom(room: RoomData): RoomData {
+  const rounds = Object.fromEntries(Object.entries(room.rounds ?? {}).map(([id, round]) => {
+    const normalized = normalizedRound(id, round);
+    const { id: _id, ...stored } = normalized;
+    return [id, stored];
+  }));
+  return {
+    ...room,
+    meta: {
+      ...room.meta,
+      gameMode: gameModeOf(room.meta.gameMode),
+      gridSize: gridSizeOf(room.meta.gridSize),
+      seed: room.meta.seed || (room.meta.currentRoundId ? rounds[room.meta.currentRoundId]?.seed : undefined) || "LEGACY",
+    },
+    rounds,
+  };
 }
 
 type DirectoryValue = Omit<RoomSummary, "id"> & { hostId: string };
 
 function directoryValue(room: StoredRoom): DirectoryValue {
+  const gridSize = gridSizeOf(room.meta.gridSize);
   const value: DirectoryValue = {
     roomName: room.meta.roomName,
     hostId: room.meta.hostId,
     hostName: room.players[room.meta.hostId]?.name ?? "---",
     playerCount: Object.keys(room.players ?? {}).length,
     maxPlayers: room.meta.maxPlayers,
-    gameMode: room.meta.gameMode,
+    gameMode: gameModeOf(room.meta.gameMode),
     difficulty: room.meta.difficulty,
+    gridSize,
+    seed: roomSeed(room),
     isLocked: room.meta.isLocked,
     status: room.meta.status,
     createdAt: room.meta.createdAt,
@@ -152,7 +182,13 @@ export function subscribeRoomDirectory(
       if (expiryTimer) clearTimeout(expiryTimer);
       const value = (snapshot.val() ?? {}) as Record<string, Omit<RoomSummary, "id">>;
       const rooms = Object.entries(value)
-        .map(([id, room]) => ({ id, ...room }))
+        .map(([id, room]) => ({
+          id,
+          ...room,
+          gameMode: gameModeOf(room.gameMode),
+          gridSize: gridSizeOf(room.gridSize),
+          seed: room.seed || "LEGACY",
+        }))
         .sort((a, b) => b.createdAt - a.createdAt);
       const now = Date.now();
       const expired = rooms.filter((room) => {
@@ -189,7 +225,8 @@ export function subscribeRoom(
   let expiryTimer: ReturnType<typeof setTimeout> | undefined;
   const unsubscribe = onValue(roomRef, (snapshot) => {
     if (expiryTimer) clearTimeout(expiryTimer);
-    const room = snapshot.val() as RoomData | null;
+    const stored = snapshot.val() as RoomData | null;
+    const room = stored ? normalizedRoom(stored) : null;
     onRoom(room);
     if (!room) return;
     const startedAt = room.meta.currentRoundId ? room.rounds?.[room.meta.currentRoundId]?.createdAt : undefined;
@@ -213,6 +250,9 @@ export async function createRoom(input: {
   password: string;
   maxPlayers: number;
   difficulty: Difficulty;
+  gameMode: GameMode;
+  gridSize: GridSize;
+  seed: string;
 }): Promise<string> {
   const user = await ensureAnonymousUser();
   const roomName = cleanText(input.roomName, "ルーム名", 24);
@@ -223,6 +263,9 @@ export async function createRoom(input: {
   if (!(["easy", "normal", "hard"] as string[]).includes(input.difficulty)) {
     throw new Error("難易度が不正です。");
   }
+  if (!GAME_MODES.includes(input.gameMode)) throw new Error("計算モードが不正です。");
+  if (input.gridSize !== 5 && input.gridSize !== 10) throw new Error("マス数が不正です。");
+  const seed = input.seed.trim() ? normalizeSeed(input.seed) : createRandomSeed();
 
   const roomId = push(ref(database, "rooms")).key;
   if (!roomId) throw new Error("ルームIDを生成できませんでした。");
@@ -245,8 +288,10 @@ export async function createRoom(input: {
       roomName,
       hostId: user.uid,
       maxPlayers: input.maxPlayers,
-      gameMode: "multiplication",
+      gameMode: input.gameMode,
       difficulty: input.difficulty,
+      gridSize: input.gridSize,
+      seed,
       status: "waiting",
       isLocked: Boolean(input.password),
       createdAt: now,
@@ -355,6 +400,7 @@ export async function startRound(roomId: string): Promise<void> {
   const before = (await get(roomRef)).val() as StoredRoom | null;
   const roundId = push(ref(database, `rooms/${roomId}/rounds`)).key;
   if (!roundId) throw new Error("ラウンドIDを生成できませんでした。");
+  const fallbackSeed = createRandomSeed();
   let failure = "現在は開始できません。";
 
   const result = await runTransaction(roomRef, (current: StoredRoom | null) => {
@@ -370,15 +416,24 @@ export async function startRound(roomId: string): Promise<void> {
       return;
     }
     const now = Date.now();
+    const gameMode = gameModeOf(current.meta.gameMode);
+    const gridSize = gridSizeOf(current.meta.gridSize);
+    const seed = current.meta.seed ? normalizeSeed(current.meta.seed) : fallbackSeed;
+    const generated = generateOperands({ seed, gameMode, gridSize, difficulty: current.meta.difficulty });
+    current.meta.gameMode = gameMode;
+    current.meta.gridSize = gridSize;
+    current.meta.seed = seed;
     current.meta.status = "playing";
     current.meta.currentRoundId = roundId;
     current.rounds ??= {};
     current.rounds[roundId] = {
-      seed: crypto.randomUUID(),
-      rowValues: operands(current.meta.difficulty),
-      columnValues: operands(current.meta.difficulty),
+      seed,
+      generatorVersion: GENERATOR_VERSION,
+      rowValues: generated.rowValues,
+      columnValues: generated.columnValues,
       difficulty: current.meta.difficulty,
-      gameMode: current.meta.gameMode,
+      gameMode,
+      gridSize,
       createdAt: now,
       participantIds: entries.map(([id]) => id),
     };
@@ -424,6 +479,9 @@ export async function submitFinish(roomId: string, roundId: string, elapsedTime:
   const roomSnapshot = await get(ref(database, `rooms/${roomId}`));
   const room = roomSnapshot.val() as StoredRoom | null;
   if (!room || room.meta.currentRoundId !== roundId) throw new Error("ゴールを確定できませんでした。");
+  const round = room.rounds?.[roundId];
+  if (!round) throw new Error("ゴールを確定できませんでした。");
+  const total = gridSizeOf(round.gridSize, round.rowValues) ** 2;
   const rounded = Math.round(elapsedTime);
   if (!Number.isFinite(rounded) || rounded < 0 || rounded > 86_400_000) throw new Error("タイムが不正です。");
 
@@ -433,7 +491,7 @@ export async function submitFinish(roomId: string, roundId: string, elapsedTime:
     player ??= beforePlayer ? structuredClone(beforePlayer) : null;
     if (!player || player.status === "dnf") return;
     if (player.status === "finished") return player;
-    player.completedCount = 100;
+    player.completedCount = total;
     player.status = "finished";
     player.elapsedTime = rounded;
     player.finishedAt = Date.now();
@@ -447,6 +505,57 @@ export async function submitFinish(roomId: string, roundId: string, elapsedTime:
   if (status === "finished") metaUpdate.finishedAt = latest.meta.finishedAt ?? Date.now();
   await update(ref(database, `rooms/${roomId}/meta`), metaUpdate);
   await syncDirectory(roomId);
+  await recordLeaderboardBest(roomId, roundId);
+}
+
+export async function recordLeaderboardBest(roomId: string, roundId: string): Promise<void> {
+  const user = await ensureAnonymousUser();
+  const snapshot = await get(ref(database, `rooms/${roomId}`));
+  const stored = snapshot.val() as StoredRoom | null;
+  if (!stored || stored.meta.currentRoundId !== roundId) throw new Error("ランキング記録を確認できませんでした。");
+  const room = normalizedRoom(stored);
+  const player = room.players[user.uid];
+  const roundValue = room.rounds?.[roundId];
+  if (!player || player.status !== "finished" || player.elapsedTime == null || !roundValue) {
+    throw new Error("完走後にランキングへ登録できます。");
+  }
+  const round = normalizedRound(roundId, roundValue);
+  const entryRef = ref(database, `leaderboards/${round.gameMode}/${round.gridSize}/${round.difficulty}/${user.uid}`);
+  const entry: Omit<LeaderboardEntry, "id"> = {
+    playerName: player.name,
+    elapsedTime: player.elapsedTime,
+    seed: round.seed,
+    achievedAt: player.finishedAt ?? Date.now(),
+    roomId,
+    roundId,
+    generatorVersion: round.generatorVersion,
+  };
+  await runTransaction(entryRef, (current: Omit<LeaderboardEntry, "id"> | null) => {
+    if (current && current.elapsedTime <= entry.elapsedTime) return current;
+    return entry;
+  }, { applyLocally: false });
+}
+
+export function subscribeLeaderboard(
+  gameMode: GameMode,
+  gridSize: GridSize,
+  difficulty: Difficulty,
+  onEntries: (entries: LeaderboardEntry[]) => void,
+  onError: (error: Error) => void,
+): Unsubscribe {
+  const leaderboardQuery = query(
+    ref(database, `leaderboards/${gameMode}/${gridSize}/${difficulty}`),
+    orderByChild("elapsedTime"),
+    limitToFirst(5),
+  );
+  return onValue(leaderboardQuery, (snapshot) => {
+    const value = (snapshot.val() ?? {}) as Record<string, Omit<LeaderboardEntry, "id">>;
+    const entries = Object.entries(value)
+      .map(([id, entry]) => ({ id, ...entry }))
+      .sort((left, right) => left.elapsedTime - right.elapsedTime || left.id.localeCompare(right.id))
+      .slice(0, 5);
+    onEntries(entries);
+  }, onError);
 }
 
 export async function reconcileRoom(roomId: string): Promise<void> {

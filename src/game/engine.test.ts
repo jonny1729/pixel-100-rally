@@ -7,6 +7,7 @@ import {
   completedCount,
   createRun,
   enterDigit,
+  enterNotDivisible,
   formatTime,
   passCurrent,
 } from "./engine";
@@ -18,6 +19,8 @@ const round: RoundConfig = {
   columnValues: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
   difficulty: "normal",
   gameMode: "multiplication",
+  gridSize: 10,
+  generatorVersion: 1,
   createdAt: 0,
   participantIds: ["a"],
 };
@@ -76,5 +79,21 @@ describe("100マス計算エンジン", () => {
   it("タイムを分・秒・ミリ秒で整形する", () => {
     expect(formatTime(83_482)).toBe("01:23.482");
     expect(formatTime(undefined)).toBe("--:--.---");
+  });
+
+  it("5×5では25問で完走する", () => {
+    const smallRound = { ...round, gridSize: 5 as const, rowValues: [1, 2, 3, 4, 5], columnValues: [1, 2, 3, 4, 5] };
+    const state = { ...createRun(smallRound.id, 5), remainingQueue: [0] };
+    const result = enterDigit(state, 1, smallRound);
+    expect(result.event).toBe("finished");
+    expect(completedCount(result.state)).toBe(25);
+  });
+
+  it("割り切れない問題は専用入力だけを正解にする", () => {
+    const divisionRound = { ...round, gameMode: "division" as const, rowValues: [7, ...round.rowValues.slice(1)], columnValues: [3, ...round.columnValues.slice(1)] };
+    expect(enterDigit(createRun(divisionRound.id), 2, divisionRound).event).toBe("wrong");
+    const result = enterNotDivisible(createRun(divisionRound.id), divisionRound);
+    expect(result.event).toBe("correct");
+    expect(result.state.answers[0]).toBe("not-divisible");
   });
 });

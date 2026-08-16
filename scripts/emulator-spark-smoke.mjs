@@ -4,6 +4,9 @@ import {
   connectDatabaseEmulator,
   get,
   getDatabase,
+  limitToFirst,
+  orderByChild,
+  query,
   ref,
   remove,
   runTransaction,
@@ -57,12 +60,14 @@ function summary(room, hostId) {
     hostName: room.players[hostId].name,
     playerCount: Object.keys(room.players).length,
     maxPlayers: room.meta.maxPlayers,
-    gameMode: "multiplication",
+    gameMode: room.meta.gameMode,
     difficulty: room.meta.difficulty,
     isLocked: room.meta.isLocked,
     status: room.meta.status,
     createdAt: room.meta.createdAt,
   };
+  if (room.meta.gridSize !== undefined) value.gridSize = room.meta.gridSize;
+  if (room.meta.seed !== undefined) value.seed = room.meta.seed;
   const currentRound = room.meta.currentRoundId ? room.rounds?.[room.meta.currentRoundId] : undefined;
   if (currentRound?.createdAt !== undefined) value.startedAt = currentRound.createdAt;
   if (room.meta.finishedAt !== undefined) value.finishedAt = room.meta.finishedAt;
@@ -87,8 +92,10 @@ const room = {
     roomName: "SPARK SMOKE",
     hostId: hostUser.uid,
     maxPlayers: 8,
-    gameMode: "multiplication",
+    gameMode: "division",
     difficulty: "normal",
+    gridSize: 5,
+    seed: "SPARK-SEED",
     status: "waiting",
     isLocked: false,
     createdAt: now,
@@ -132,11 +139,13 @@ const started = await runTransaction(ref(host.database, `rooms/${roomId}`), (cur
   current.meta.currentRoundId = roundId;
   current.rounds = {
     [roundId]: {
-      seed: "spark-smoke-seed",
-      rowValues: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-      columnValues: [10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
+      seed: "SPARK-SEED",
+      generatorVersion: 1,
+      rowValues: [11, 12, 13, 14, 15],
+      columnValues: [1, 2, 3, 4, 5],
       difficulty: "normal",
-      gameMode: "multiplication",
+      gameMode: "division",
+      gridSize: 5,
       createdAt: Date.now(),
       participantIds: [hostUser.uid, guestUser.uid],
     },
@@ -153,16 +162,47 @@ if (!started.committed) throw new Error("Host could not start the round.");
 await set(ref(host.database, `roomDirectory/${roomId}`), summary(started.snapshot.val(), hostUser.uid));
 stage = "sync progress";
 await update(ref(guest.database, `rooms/${roomId}/players/${guestUser.uid}`), {
-  completedCount: 67,
+  completedCount: 17,
   progressAt: Date.now(),
 });
+const guestFinishedAt = Date.now();
 await update(ref(guest.database, `rooms/${roomId}/players/${guestUser.uid}`), {
-  completedCount: 100,
+  completedCount: 25,
   status: "finished",
   elapsedTime: 43210,
-  finishedAt: Date.now(),
+  finishedAt: guestFinishedAt,
 });
 await update(ref(guest.database, `rooms/${roomId}/meta`), { status: "results" });
+
+stage = "write leaderboard personal best";
+const leaderboardRef = ref(guest.database, `leaderboards/division/5/normal/${guestUser.uid}`);
+const leaderboardEntry = {
+  playerName: "GUEST",
+  elapsedTime: 43210,
+  seed: "SPARK-SEED",
+  achievedAt: guestFinishedAt,
+  roomId,
+  roundId,
+  generatorVersion: 1,
+};
+await set(leaderboardRef, leaderboardEntry);
+let slowerRejected = false;
+try {
+  await set(leaderboardRef, { ...leaderboardEntry, elapsedTime: 50000 });
+} catch {
+  slowerRejected = true;
+}
+if (!slowerRejected) throw new Error("A slower leaderboard time replaced a personal best.");
+let outsiderOverwriteRejected = false;
+try {
+  await set(ref(outsider.database, `leaderboards/division/5/normal/${guestUser.uid}`), { ...leaderboardEntry, elapsedTime: 1000 });
+} catch {
+  outsiderOverwriteRejected = true;
+}
+if (!outsiderOverwriteRejected) throw new Error("An outsider overwrote another leaderboard entry.");
+const topFive = await get(query(ref(outsider.database, "leaderboards/division/5/normal"), orderByChild("elapsedTime"), limitToFirst(5)));
+const topFiveValue = topFive.val() ?? {};
+if (!topFiveValue[guestUser.uid] || Object.keys(topFiveValue).length > 5) throw new Error("The leaderboard top-five query did not return the expected entry.");
 await update(ref(host.database, `rooms/${roomId}/players/${hostUser.uid}`), {
   online: false,
   disconnectedAt: Date.now(),
@@ -172,7 +212,7 @@ await update(ref(guest.database, `rooms/${roomId}/meta`), { status: "finished", 
 
 const finished = (await get(ref(host.database, `rooms/${roomId}`))).val();
 await set(ref(guest.database, `roomDirectory/${roomId}`), summary(finished, hostUser.uid));
-if (finished.players[guestUser.uid].completedCount !== 100 || finished.players[hostUser.uid].status !== "dnf" || finished.meta.status !== "finished") {
+if (finished.players[guestUser.uid].completedCount !== 25 || finished.players[hostUser.uid].status !== "dnf" || finished.meta.status !== "finished") {
   throw new Error("Progress or finish state did not synchronize.");
 }
 

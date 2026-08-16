@@ -31,7 +31,7 @@ export function WelcomeScreen({ onComplete }: { onComplete: (name: string) => Pr
       <div className="sky-pixels" aria-hidden="true" />
       <div className="splash__content">
         <Brand />
-        <p className="splash__tagline">100問を駆け抜けろ。</p>
+        <p className="splash__tagline">25問、100問。計算サーキットを駆け抜けろ。</p>
         <form className="pixel-panel entry-card" onSubmit={handleSubmit}>
           <div className="entry-card__number">01</div>
           <label htmlFor="player-name">レーサー名</label>
